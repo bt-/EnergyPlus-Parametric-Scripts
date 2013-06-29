@@ -1,0 +1,336 @@
+# ePlusShellFuncLib.lib
+
+# VARIABLES
+arraySize=0
+origIdfFile=input
+origRviFile=input
+weatherFileName=blankName
+inputNoExtension=blankNameTwo
+
+# FUNCTIONS
+#===============================================
+#Borrowed from runenergplus script in EnergyPlus bin folder
+function set_ep_dir () {
+	U_DIR=`pwd`
+	if [ -n "`readlink "$0"`" ]; then
+		S_DIR=$(cd "$(dirname "$(readlink "$0")")"; pwd)
+		cd "$U_DIR"
+	else
+		S_DIR=$(cd "$(dirname "$0")"; pwd)
+		cd "$U_DIR"
+	fi
+	ENERGYPLUS_DIR=`dirname "$S_DIR"`
+}
+
+#===============================================
+bigComment ()
+{
+echo
+echo
+echo "***********************************************"
+echo "*************  "${1}"  ***************"
+echo "***********************************************"
+echo
+}
+
+#===============================================
+litComment ()
+{
+echo "*************  "${1}"  ***************"
+}
+
+#===============================================
+newDirFunc ()
+{
+	mkdir ${1}
+	cp ./* ${1}
+	cd ${1}
+}
+
+#===============================================
+stripExtFunc ()
+{
+mkfile -n 10 noExtension #MAKES BLANK FILE
+
+ed -s noExtension <<EOF
+H
+i
+${1}${2}
+.
+w
+q
+EOF
+
+
+idfExtTest=$(awk -F. '/idf/ {print $2}' noExtension)
+echo "idfExtTest: $idfExtTest"
+if [ "$idfExtTest" != "idf" ]; then
+	inputNoExtension=$(awk -F. '/idf/ {print $1"."$2}' noExtension)
+	echo "inputNoExtension: $inputNoExtension"
+else
+	inputNoExtension=$(awk -F. '/idf/ {print $1}' noExtension)
+	echo "inputNoExtension: $inputNoExtension"
+fi
+
+rm noExtension
+}
+
+
+#===============================================
+prepRviFunc ()
+{
+if [ "${2}" != "" ]; then
+cp $1 $inputNoExtension"-"${2}".rvi"
+ed -s $inputNoExtension"-"${2}".rvi" <<EOF
+H
+/sHELLcSVnAME/
+s/sHELLcSVnAME/$inputNoExtension${2}.csv/
+w
+q
+EOF
+else
+cp $1 $inputNoExtension".rvi"
+ed -s $inputNoExtension".rvi" <<EOF
+H
+/sHELLcSVnAME/
+s/sHELLcSVnAME/$inputNoExtension.csv/
+w
+q
+EOF
+fi
+}
+
+#===============================================
+seekSfFunc ()
+{
+#========================== FILE FOR SEEKING A SOLAR FRACTION USING E+ SIMS =====
+# ARGUMENT 1 ==== TYPE OF RUN: 1 -Seek given solar fraction at given storage volume/collector area ratio;
+#                              2 -Seek solar fraction for maximum storage volume/collector area ratio from parametric run that is
+#                                 10% above solar fraction for minimum storage volume/collector area ratio;
+#                              3 -Seek solar fraction of 1 for maximum storage volume/collector from parametric run
+#							   4 -Seek solar fraction of 1 for volume/collector of 1
+# ARGUMENT 2 ==== IF ARG 1 == 1 THEN: solar fraction to seek
+#                 IF ARG 1 == 2,3, or 4 THEN: number of parametric runs
+# ARGUMENT 3 ==== IF ARG 1 == 1 THEN: storage volume/collector area ratio
+#                 IF ARG 1 == 2 or 3 THEN: ${args[4]} of ePlusSTSDesSpace.sh, which is the ending storage volume/collector area ratio
+#				  IF ARG 1 == 4	THEN: value of 0 (not used because volume/collector area ratio=1
+#===========================================
+
+
+
+
+
+#===============================================
+#Determines how script is to run find array size for bottom curve, top curve or given SF
+if [ "$1" -eq "1" ]; then
+	sfGoal=$2
+	tankColRatio=$3
+	echo
+	echo "************* USER INPUT FOR SFGOAL AND TANK/COL RATIO ****************"
+	echo "seek sf: $sfGoal"
+	echo "for ratio: $tankColRatio"
+	echo "*******************************************"
+	echo
+	newDirFunc arrayArea
+elif [ "$1" -eq "2" ]; then
+	#Determines solar fraction for largest and smallest volume from last parametric runs
+	minSF=$(sf.sh $inputNoExtension 1)
+	maxSF=$(sf.sh $inputNoExtension $2)
+	#Set goal solar fraction
+	sfGoal=$(echo "scale=4; $minSF + 0.10" | bc)
+	tankColRatio=$3
+	SF=$maxSF
+	ifClauseOld=1
+	echo "************* SFGOAL AND TANK/COL RATIO BASED ON PARA RESULTS FOR MIN CURVE ****************"
+	echo "Min SF:   $minSF"
+	echo "Max SF:   $maxSF"
+	echo "SF Goal: $sfGoal"
+	echo "for ratio: $tankColRatio"
+	echo "ifClause old: $ifClauseOld"
+	echo "*******************************************"
+	echo
+	cd .. #Back to working directory
+	newDirFunc arrayAreaBottomCurve
+elif [ "$1" -eq "3" ]; then
+	sfGoal=1
+	tankColRatio=$3
+	ifClauseOld=1
+	echo "************* SFGOAL AND TANK/COL RATIO BASED ON PARA RESULTS FOR MAX CURVE ****************"
+	echo "SF Goal: $sfGoal"
+	echo "for ratio: $tankColRatio"
+	echo "ifClause old: $ifClauseOld"
+	echo "*******************************************"
+	echo
+	cd .. #Back to working directory
+	newDirFunc arrayAreaHighCurve
+elif [ "$1" -eq "4" ]; then
+	sfGoal=1
+	tankColRatio=1
+	ifClauseOld=1
+	echo "************* SFGOAL AND TANK/COL RATIO BASED ON PARA RESULTS FOR MAX CURVE ****************"
+	echo "SF Goal: $sfGoal"
+	echo "for ratio: $tankColRatio"
+	echo "ifClause old: $ifClauseOld"
+	echo "*******************************************"
+	echo
+	cd .. #Back to working directory
+	newDirFunc arrayAreaHighestCurve
+else
+	echo "ERROR: argument 2 counting from zero must be 1,2,3, or 4"
+	exit
+fi
+	
+#===============================================
+#Make new directory for output of finding array size
+
+
+
+#===============================================
+#Increases or decreases array size and repeats simulation until SF is close to goal SF
+stepSize=$(echo "scale=4; $arraySize / 2" | bc)
+sfTestVal=0
+guessCount=1
+
+while [ $sfTestVal -ne 1 ]; do
+#SETS arraySize TO NEW VALUE
+echo "************ BEGINNING OF LOOP ************"
+echo "SF: 	$SF"
+echo "sfGoal:  $sfGoal"
+echo "arraySize: $arraySize"
+echo "stepSize:  $stepSize"
+echo "*******************************************"
+echo
+set $(awk -F, -v SF=$SF -v sfGoal=$sfGoal -v arraySize=$arraySize -v stepSize=$stepSize '
+	BEGIN { 
+		if(SF-sfGoal>0) {
+			arraySize=arraySize-stepSize;
+			print arraySize; 
+			print 0
+			} 
+		else {
+			arraySize=arraySize+stepSize;
+			print arraySize; 
+			print 1
+			}
+	}')
+arraySize=$1
+ifClauseNew=$2
+echo "************ ARRAY SIZE ***************"
+echo "arraySize:  $arraySize"
+echo "ifClause:   $ifClauseNew"
+echo "*******************************************"
+echo
+
+if [ $ifClauseNew -ne $ifClauseOld ]; then
+ifClauseOld=$ifClauseNew
+stepSize=$(echo "scale=4; $stepSize / 2" | bc)
+echo
+echo "************ ifClause NEW OLD COMP ***************"
+echo "CHANGE IN STEP SIZE"
+echo "new stepSize: $stepSize"
+echo "*******************************************"
+echo
+else
+echo
+echo "************ ifClause NEW OLD COMP ***************"
+echo "NO CHANGE IN STEP SIZE"
+fi
+	
+#Copy setup files to new directory for new array size and move to it
+newDirFunc $guessCount"-"$arraySize
+echo
+echo "MOVED TO NEW DIRECTORY"
+echo
+
+guessCount=$(echo "scale=1; $guessCount + 1" | bc)
+if [ "$guessCount" -gt 30 ]; then
+	echo "ERROR: Too many loops in the seekSfFunc"
+	exit
+fi
+
+
+#Resets inputNoExtension variable and resets .rvi file
+bigComment "LOOK HERE"
+echo "inputNoExtension: $inputNoExtension"
+echo "arraySize: $arraySize"
+echo "origIdfFile: $origIdfFile"
+echo
+echo "************ CALLING stripExtFunc *************"
+stripExtFunc $arraySize $origIdfFile
+echo "inputNoExtension: $inputNoExtension"
+echo "***********************************************"
+echo
+echo "************ CALLING prepRviFunc *************"
+prepRviFunc $origRviFile
+echo "***********************************************"
+echo
+
+bigComment "Collector .idf Setup"
+#Calls the script setArraySize.sh to set correct number of collectors in .idf file
+setArraySize.sh $origIdfFile $arraySize
+
+bigComment "Volume Setup"
+echo $arraySize$origIdfFile
+
+awk -F, -v VAR=$arraySize -v tCRatio=$tankColRatio '
+	/sHELLtANKvOLUMEhEATER/ {
+		volume=VAR*tCRatio
+ 		printf("    %5.2f,               !- ShellTankVolHeater\n",volume) 
+ 		}
+ 		
+ 	/sHELLlOSScOEFFhEATER/ {
+		uaTankVol = tCRatio * VAR
+		logTankVol = log(uaTankVol)
+		insThick = 21.404 * exp(logTankVol * 0.3619)
+		uValue = 1/(0.0004375 + ((insThick/1000)/0.02) + 0.23)
+		logHeight = log((36 * uaTankVol) / ( 3.14159))
+		height = exp(logHeight * (0.3333333))
+		radius = height/6
+		surfArea = (2 * 3.14159 * height * (radius + 0.007 + (insThick/1000))) + (2 * 3.14159 * (radius + 0.007 + (insThick/1000)) * (radius + 0.007 + (insThick/1000)))
+		uaValue = surfArea * uValue
+		printf("%10.6f,    !- \n",uaValue);
+		}
+
+ !/(sHELLtANKvOLUMEhEATER)|(sHELLlOSScOEFFhEATER)/ {
+ 		print
+ 		}' $arraySize$origIdfFile > TEMP_$arraySize$origIdfFile
+	
+rm $arraySize$origIdfFile
+mv TEMP_$arraySize$origIdfFile $arraySize$origIdfFile
+
+ 		
+bigComment "Run E+"
+#Run E+ and check beginning and ending tank temps if they need to be corrected
+echo "============= inputNoExtension:	$inputNoExtension"
+ePlusTempAdj.sh $inputNoExtension $weatherFileName
+
+bigComment "Eval E+ Results"
+#Get solar fraction for first and last sim (smallest and largest tank vol)
+SF=$(sf.sh $inputNoExtension)
+echo "SF:	$SF"
+
+#Test to see if the SF is close enough to exit while loop
+set $(awk -F, -v SF=$SF -v sfGoal=$sfGoal '
+	BEGIN { 
+		if(SF-sfGoal>=0) {
+			testVal=SF-sfGoal;
+			} 
+		else {
+			testVal=(SF-sfGoal)*-1;
+			}
+		if(testVal<0.05) {
+			print 1;
+			}
+		else {
+			print 0;
+			}
+	}')
+sfTestVal=$1
+echo "sfTestVal $sfTestVal"
+echo "current array Size:	$arraySize"
+
+#Back to array size finding directory
+cd ..
+done
+}
+
