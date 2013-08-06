@@ -96,8 +96,7 @@ while [ $count -le $nRuns ]; do
 		fi
 	done
 	#GET AND DISPLAY SF FOR RUN
-	set $(sf.sh ${args[0]} $cnt)
-	SF=$1
+	SF=$(sf.sh ${args[0]} $cnt)
 	echo "*************  Solar Fraction  ***************"
 	echo "SF:    $SF"
 
