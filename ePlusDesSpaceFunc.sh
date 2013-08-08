@@ -22,6 +22,9 @@ echo "
 
 ******************************************************************************
 
+NOTE: These scripts manipulate EnergyPlus input and output and run EnergyPlus simulations.
+The scripts do not in any way modify the EnergyPlus source code. 
+
 "
 
 
